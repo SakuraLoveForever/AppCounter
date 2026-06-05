@@ -1,0 +1,12 @@
+# 个人使用数据
+app_counter_data.json
+
+# PyInstaller 构建产物（中间文件不追踪，exe 本身要上传）
+dist/
+build/
+*.spec
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
