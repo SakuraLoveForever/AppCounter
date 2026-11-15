@@ -4,10 +4,9 @@ GUI 界面模块
 """
 
 import os
-import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, filedialog
+from tkinter import ttk, simpledialog, filedialog, font
 from datetime import date, timedelta
 from typing import Optional
 
@@ -19,19 +18,19 @@ APP_TITLE = "AppCounter - 应用使用统计"
 APP_ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_SIZE = 10
-FONT_SIZE_TITLE = 14
 FONT_SIZE_SMALL = 9
 
-# 颜色
-COLOR_BG = "#f5f5f5"
-COLOR_PRIMARY = "#1890ff"
-COLOR_SUCCESS = "#52c41a"
-COLOR_WARNING = "#faad14"
-COLOR_DANGER = "#ff4d4f"
-COLOR_TEXT = "#262626"
-COLOR_TEXT_SECONDARY = "#8c8c8c"
-COLOR_BORDER = "#d9d9d9"
-COLOR_CARD_BG = "#ffffff"
+COLOR_BG = "#141820"
+COLOR_CARD_BG = "#1d2430"
+COLOR_BORDER = "#303a4b"
+COLOR_BUTTON = "#273140"
+COLOR_HOVER = "#354259"
+COLOR_SELECTED = "#2a4162"
+COLOR_PRIMARY = "#a4c6ff"
+COLOR_SUCCESS = "#91d6b2"
+COLOR_DANGER = "#ffb0b8"
+COLOR_TEXT = "#edf1f7"
+COLOR_TEXT_SECONDARY = "#a6b2c5"
 
 # 月份中文名
 _MONTH_NAMES = ["一月", "二月", "三月", "四月", "五月", "六月",
@@ -39,99 +38,137 @@ _MONTH_NAMES = ["一月", "二月", "三月", "四月", "五月", "六月",
 _WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 
 
+def _dark_titlebar(window):
+    """在支持的 Windows 版本上设置深色标题栏。"""
+    import ctypes
+    from ctypes import wintypes
+
+    window.update_idletasks()
+    hwnd = wintypes.HWND(int(window.tk.call("wm", "frame", str(window)), 16))
+    enabled = wintypes.BOOL(True)
+    try:
+        set_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        if set_attribute(hwnd, 20, ctypes.byref(enabled), ctypes.sizeof(enabled)) != 0:
+            set_attribute(hwnd, 19, ctypes.byref(enabled), ctypes.sizeof(enabled))
+    except (AttributeError, OSError):
+        pass
+
+
+class DarkDialog(simpledialog.Dialog):
+    """应用内提示、确认和重命名，共用 Tk 的模态窗口行为。"""
+
+    def __init__(self, parent, title, message, *, confirm=False, initial=None):
+        self.message = message
+        self.confirm = confirm
+        self.initial = initial
+        previous_grab = parent.grab_current()
+        try:
+            super().__init__(parent, title)
+        finally:
+            if previous_grab is not None and previous_grab.winfo_exists():
+                previous_grab.grab_set()
+
+    def body(self, master):
+        self.configure(bg=COLOR_BG)
+        master.configure(bg=COLOR_BG, padx=10, pady=6)
+        self.resizable(False, False)
+        self.bind("<Map>", lambda event: _dark_titlebar(self) if event.widget == self else None)
+        ttk.Label(master, text=self.message, wraplength=340, justify="left").pack(anchor="w")
+        if self.initial is not None:
+            self.entry = ttk.Entry(master, width=32)
+            self.entry.insert(0, self.initial)
+            self.entry.selection_range(0, tk.END)
+            self.entry.pack(fill=tk.X, pady=(6, 0))
+            return self.entry
+
+    def buttonbox(self):
+        actions = ttk.Frame(self)
+        actions.pack(fill=tk.X, padx=15, pady=(0, 12))
+        ok = ttk.Button(actions, text="确定", command=self.ok,
+                        style="Danger.TButton" if self.confirm else "Primary.TButton")
+        ok.pack(side=tk.RIGHT)
+        ok.bind("<Return>", self.ok)
+        if self.confirm or self.initial is not None:
+            cancel = ttk.Button(actions, text="取消", command=self.cancel)
+            cancel.pack(side=tk.RIGHT, padx=(0, 5))
+            cancel.bind("<Return>", self.cancel)
+            if self.confirm:
+                self.initial_focus = cancel
+        else:
+            self.initial_focus = ok
+        if self.initial is not None:
+            self.entry.bind("<Return>", self.ok)
+        self.bind("<Escape>", self.cancel)
+
+    def apply(self):
+        self.result = self.entry.get() if self.initial is not None else True
+
+
 class DatePicker:
     """小型日历弹出窗口，选中日期后写入目标 Entry"""
 
-    def __init__(self, parent, entry: tk.Entry):
+    def __init__(self, parent, entry: ttk.Entry):
         self.entry = entry
         self.top = tk.Toplevel(parent)
         self.top.title("选择日期")
         self.top.resizable(False, False)
-        self.top.configure(bg=COLOR_CARD_BG)
-        self.top.transient(parent)
+        self.top.configure(bg=COLOR_BG)
+        self.top.transient(parent.winfo_toplevel())
 
-        # 从 entry 读取初始日期，默认今天
         try:
-            parts = entry.get().strip().split("-")
-            self._year = int(parts[0])
-            self._month = int(parts[1])
-        except Exception:
-            today = date.today()
-            self._year = today.year
-            self._month = today.month
+            current = date.fromisoformat(entry.get().strip())
+        except ValueError:
+            current = date.today()
+        self._year = current.year
+        self._month = current.month
 
         self._build()
-        # 定位到 entry 下方
-        self.top.update_idletasks()
         ex = entry.winfo_rootx()
         ey = entry.winfo_rooty() + entry.winfo_height() + 2
         self.top.geometry(f"+{ex}+{ey}")
+        _dark_titlebar(self.top)
         self.top.focus_set()
-        # 点击窗口外部自动关闭
-        self.top.bind("<FocusOut>", lambda e: self.top.after(100, self._check_focus))
+        self.top.bind("<Escape>", lambda event: self.top.destroy())
+        self.top.bind("<FocusOut>", self._on_focus_out)
+
+    def _on_focus_out(self, event):
+        self.top.after_idle(self._check_focus)
 
     def _check_focus(self):
-        """延迟检查：如果焦点完全离开了日历窗口则关闭"""
-        try:
-            focus_widget = self.top.focus_get()
-            if focus_widget is None:
-                self.top.destroy()
-        except Exception:
+        focus = self.top.focus_get()
+        if focus is None or focus.winfo_toplevel() != self.top:
             self.top.destroy()
 
     def _build(self):
-        # 月份导航
-        nav = tk.Frame(self.top, bg=COLOR_PRIMARY)
+        nav = ttk.Frame(self.top, padding=(5, 5))
         nav.pack(fill=tk.X)
-        tk.Button(nav, text="◀", font=(FONT_FAMILY, 9), bg=COLOR_PRIMARY, fg="white",
-                  relief="flat", bd=0, padx=6,
-                  command=self._prev_month).pack(side=tk.LEFT, padx=2, pady=2)
-        self.lbl_month = tk.Label(nav, font=(FONT_FAMILY, 10, "bold"),
-                                  bg=COLOR_PRIMARY, fg="white")
+        ttk.Button(nav, text="‹", width=3, command=self._prev_month).pack(side=tk.LEFT)
+        self.lbl_month = ttk.Label(nav, style="Summary.TLabel")
         self.lbl_month.pack(side=tk.LEFT, expand=True)
-        tk.Button(nav, text="▶", font=(FONT_FAMILY, 9), bg=COLOR_PRIMARY, fg="white",
-                  relief="flat", bd=0, padx=6,
-                  command=self._next_month).pack(side=tk.RIGHT, padx=2, pady=2)
+        ttk.Button(nav, text="›", width=3, command=self._next_month).pack(side=tk.RIGHT)
 
-        # 星期头
-        wh = tk.Frame(self.top, bg=COLOR_CARD_BG)
-        wh.pack(fill=tk.X, padx=4, pady=(4, 0))
-        for wd in _WEEKDAYS:
-            tk.Label(wh, text=wd, font=(FONT_FAMILY, 8), width=3,
-                     bg=COLOR_CARD_BG, fg=COLOR_TEXT_SECONDARY).pack(side=tk.LEFT)
-
-        # 日期网格
-        self._grid_frame = tk.Frame(self.top, bg=COLOR_CARD_BG)
-        self._grid_frame.pack(padx=4, pady=4)
+        self._grid_frame = ttk.Frame(self.top, padding=(5, 0, 5, 5))
+        self._grid_frame.pack()
         self._draw_grid()
 
     def _draw_grid(self):
-        for w in self._grid_frame.winfo_children():
-            w.destroy()
-        self.lbl_month.config(text=f"{self._year}  {_MONTH_NAMES[self._month - 1]}")
-
         import calendar
-        cal = calendar.monthcalendar(self._year, self._month)
-        today = date.today()
 
-        for r, week in enumerate(cal):
-            for c, day in enumerate(week):
-                if day == 0:
-                    lbl = tk.Label(self._grid_frame, text="", width=4, height=2,
-                                   bg=COLOR_CARD_BG)
-                else:
-                    is_today = (self._year == today.year and self._month == today.month
-                                and day == today.day)
-                    bg = "#e6f7ff" if is_today else COLOR_CARD_BG
-                    fg = COLOR_PRIMARY if is_today else COLOR_TEXT
-                    lbl = tk.Label(self._grid_frame, text=str(day), width=4, height=2,
-                                   bg=bg, fg=fg, font=(FONT_FAMILY, 9),
-                                   cursor="hand2", relief="flat")
-                    lbl.bind("<Button-1>", lambda e, d=day: self._select(d))
-                    lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg="#bae7ff"))
-                    lbl.bind("<Leave>", lambda e, l=lbl, d=day, t=is_today:
-                             l.configure(bg="#e6f7ff" if t else COLOR_CARD_BG))
-                lbl.grid(row=r, column=c, padx=1, pady=1)
+        for widget in self._grid_frame.winfo_children():
+            widget.destroy()
+        self.lbl_month.config(text=f"{self._year} 年 {_MONTH_NAMES[self._month - 1]}")
+        for column, weekday in enumerate(_WEEKDAYS):
+            ttk.Label(self._grid_frame, text=weekday, style="Muted.TLabel",
+                      anchor="center").grid(row=0, column=column, sticky="ew")
+        today = date.today()
+        for row, week in enumerate(calendar.Calendar().monthdayscalendar(self._year, self._month), 1):
+            for column, day in enumerate(week):
+                if day:
+                    is_today = (self._year, self._month, day) == (today.year, today.month, today.day)
+                    ttk.Button(self._grid_frame, text=str(day), width=3,
+                               style="Primary.TButton" if is_today else "TButton",
+                               command=lambda d=day: self._select(d)
+                               ).grid(row=row, column=column, padx=1, pady=1)
 
     def _prev_month(self):
         if self._month == 1:
@@ -164,8 +201,9 @@ class AppCounterGUI:
 
         self.root = tk.Tk()
         self.root.title(APP_TITLE)
-        self.root.geometry("960x680")
-        self.root.minsize(800, 560)
+        scale = float(self.root.tk.call("tk", "scaling")) / (96 / 72)
+        self.root.geometry(f"{round(640 * scale)}x{round(420 * scale)}")
+        self.root.minsize(round(560 * scale), round(340 * scale))
         self.root.configure(bg=COLOR_BG)
 
         # 尝试设置图标
@@ -176,6 +214,7 @@ class AppCounterGUI:
 
         # 构建界面
         self._build_ui()
+        _dark_titlebar(self.root)
 
         # 注册监控回调（更新今日页面）
         self.monitor.add_callback(self._on_app_launched)
@@ -208,228 +247,159 @@ class AppCounterGUI:
     # ---- 样式 ----
 
     def _setup_styles(self):
-        style = ttk.Style()
-        # 使用 Windows 原生主题，避免按钮文字不显示
-        available = style.theme_names()
-        if "vista" in available:
-            style.theme_use("vista")
-        elif "winnative" in available:
-            style.theme_use("winnative")
-        else:
-            style.theme_use("clam")
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        base_font = (FONT_FAMILY, FONT_SIZE)
+        small_font = (FONT_FAMILY, FONT_SIZE_SMALL)
+        row_height = font.Font(root=self.root, font=base_font).metrics("linespace") + 6
 
-        # 通用配置
-        style.configure(".", font=(FONT_FAMILY, FONT_SIZE), background=COLOR_BG)
-
-        # Notebook (标签页)
-        style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
-        style.configure("TNotebook.Tab", font=(FONT_FAMILY, FONT_SIZE), padding=[20, 8],
-                        background=COLOR_BG, borderwidth=0)
+        style.configure(".", font=base_font, background=COLOR_BG, foreground=COLOR_TEXT,
+                        bordercolor=COLOR_BORDER, lightcolor=COLOR_BORDER, darkcolor=COLOR_BORDER,
+                        troughcolor=COLOR_BG, focuscolor=COLOR_PRIMARY)
+        style.configure("TNotebook", borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab", padding=(12, 5), background=COLOR_BG,
+                        foreground=COLOR_TEXT_SECONDARY, borderwidth=0)
         style.map("TNotebook.Tab",
-                  background=[("selected", COLOR_CARD_BG)],
-                  foreground=[("selected", COLOR_PRIMARY)])
+                  background=[("selected", COLOR_SELECTED), ("active", COLOR_BUTTON)],
+                  foreground=[("selected", COLOR_TEXT), ("active", COLOR_TEXT)])
+        style.configure("TLabel", padding=0)
+        style.configure("Card.TFrame", background=COLOR_CARD_BG)
+        style.configure("Card.TLabel", background=COLOR_CARD_BG)
+        style.configure("Detail.Card.TLabel", font=small_font, foreground=COLOR_TEXT_SECONDARY)
+        style.configure("Summary.Card.TLabel", foreground=COLOR_PRIMARY)
+        style.configure("Muted.TLabel", font=small_font, foreground=COLOR_TEXT_SECONDARY)
+        style.configure("Summary.TLabel", font=base_font + ("bold",), foreground=COLOR_PRIMARY)
+        style.configure("TButton", font=small_font, width=0, padding=(8, 3),
+                        background=COLOR_BUTTON, relief="flat")
+        style.map("TButton",
+                  background=[("pressed", COLOR_SELECTED), ("active", COLOR_HOVER)],
+                  bordercolor=[("focus", COLOR_PRIMARY)],
+                  foreground=[("disabled", COLOR_TEXT_SECONDARY)])
+        style.configure("Primary.TButton", background=COLOR_SELECTED, foreground=COLOR_PRIMARY)
+        style.configure("Danger.TButton", foreground=COLOR_DANGER)
 
-        # Frame
-        style.configure("Card.TFrame", background=COLOR_CARD_BG, relief="solid", borderwidth=1)
-
-        # Label
-        style.configure("Title.TLabel", font=(FONT_FAMILY, FONT_SIZE_TITLE, "bold"),
-                        background=COLOR_CARD_BG, foreground=COLOR_TEXT)
-        style.configure("Subtitle.TLabel", font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                        background=COLOR_CARD_BG, foreground=COLOR_TEXT_SECONDARY)
-        style.configure("Count.TLabel", font=(FONT_FAMILY, 28, "bold"),
-                        background=COLOR_CARD_BG, foreground=COLOR_PRIMARY)
-        style.configure("Status.TLabel", font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                        background=COLOR_BG, foreground=COLOR_TEXT_SECONDARY)
-
-        # Button
-        style.configure("Primary.TButton", font=(FONT_FAMILY, FONT_SIZE),
-                        background=COLOR_PRIMARY, foreground="white", borderwidth=0,
-                        padding=[16, 6])
-        style.map("Primary.TButton",
-                  background=[("active", "#40a9ff"), ("pressed", "#096dd9")])
-        style.configure("Danger.TButton", font=(FONT_FAMILY, FONT_SIZE),
-                        background=COLOR_DANGER, foreground="white", borderwidth=0,
-                        padding=[16, 6])
-        style.configure("Small.TButton", font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                        padding=[8, 3])
-
-        # Treeview
-        style.configure("Treeview", font=(FONT_FAMILY, FONT_SIZE), rowheight=32,
+        style.configure("Treeview", font=base_font, rowheight=row_height, borderwidth=1,
                         background=COLOR_CARD_BG, fieldbackground=COLOR_CARD_BG)
-        style.configure("Treeview.Heading", font=(FONT_FAMILY, FONT_SIZE, "bold"),
-                        background="#fafafa", foreground=COLOR_TEXT)
-        style.map("Treeview", background=[("selected", "#e6f7ff")],
+        style.configure("Treeview.Heading", font=small_font + ("bold",),
+                        padding=(5, 3), background=COLOR_BUTTON, relief="flat")
+        style.map("Treeview", background=[("selected", COLOR_SELECTED)],
                   foreground=[("selected", COLOR_TEXT)])
-
-        # Entry
-        style.configure("TEntry", font=(FONT_FAMILY, FONT_SIZE), padding=[8, 4])
+        style.map("Treeview.Heading", background=[("active", COLOR_HOVER)])
+        style.configure("TEntry", fieldbackground=COLOR_CARD_BG, padding=(5, 3),
+                        insertcolor=COLOR_TEXT, selectbackground=COLOR_SELECTED,
+                        selectforeground=COLOR_TEXT)
+        style.map("TEntry",
+                  fieldbackground=[("readonly", COLOR_CARD_BG)],
+                  bordercolor=[("focus", COLOR_PRIMARY)],
+                  lightcolor=[("focus", COLOR_PRIMARY)],
+                  darkcolor=[("focus", COLOR_PRIMARY)])
+        style.configure("Vertical.TScrollbar", arrowsize=10, background=COLOR_BUTTON,
+                        arrowcolor=COLOR_TEXT_SECONDARY, relief="flat")
+        style.map("Vertical.TScrollbar", background=[("active", COLOR_HOVER)])
+        # Keep the dark layout and use the alt theme's checkmark indicator.
+        style.element_create("Checkmark.indicator", "from", "alt", "Checkbutton.indicator")
+        checkbox_layout = style.layout("TCheckbutton")
+        checkbox_parts = checkbox_layout[0][1]["children"]
+        checkbox_parts[0] = ("Checkmark.indicator", checkbox_parts[0][1])
+        style.layout("TCheckbutton", checkbox_layout)
+        style.configure("TCheckbutton", indicatorcolor=COLOR_BUTTON,
+                        bordercolor=COLOR_TEXT_SECONDARY, lightcolor=COLOR_TEXT_SECONDARY,
+                        shadecolor=COLOR_TEXT_SECONDARY)
+        style.map("TCheckbutton", indicatorcolor=[("selected", COLOR_SELECTED)],
+                  background=[("active", COLOR_BUTTON)])
+        style.configure("Card.TCheckbutton", background=COLOR_CARD_BG)
 
     # ---- UI 构建 ----
 
     def _build_ui(self):
-        # 顶部标题栏
-        self._build_header()
-
-        # 标签页容器
+        self._build_status_bar()
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=(6, 6))
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(6, 0))
 
-        # 四个 TAB
-        self.tab_today = tk.Frame(self.notebook, bg=COLOR_BG)
-        self.tab_history = tk.Frame(self.notebook, bg=COLOR_BG)
-        self.tab_manage = tk.Frame(self.notebook, bg=COLOR_BG)
-        self.tab_settings = tk.Frame(self.notebook, bg=COLOR_BG)
+        self.tab_today = ttk.Frame(self.notebook)
+        self.tab_history = ttk.Frame(self.notebook)
+        self.tab_manage = ttk.Frame(self.notebook)
+        self.tab_settings = ttk.Frame(self.notebook)
 
-        self.notebook.add(self.tab_today, text="   📊 今日统计   ")
-        self.notebook.add(self.tab_history, text="   📅 历史记录   ")
-        self.notebook.add(self.tab_manage, text="   ⚙ 软件管理   ")
-        self.notebook.add(self.tab_settings, text="   🔧 设置   ")
+        self.notebook.add(self.tab_today, text="今日统计")
+        self.notebook.add(self.tab_history, text="历史记录")
+        self.notebook.add(self.tab_manage, text="软件管理")
+        self.notebook.add(self.tab_settings, text="设置")
+        self.notebook.enable_traversal()
 
         self._build_today_tab()
         self._build_history_tab()
         self._build_manage_tab()
         self._build_settings_tab()
 
-        # 底部状态栏
-        self._build_status_bar()
-
-    def _build_header(self):
-        header = tk.Frame(self.root, bg=COLOR_PRIMARY, height=48)
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
-        title = tk.Label(header, text="📱 AppCounter - 应用使用统计",
-                         font=(FONT_FAMILY, 16, "bold"),
-                         bg=COLOR_PRIMARY, fg="white")
-        title.pack(side=tk.LEFT, padx=16, pady=10)
-        self.lbl_total_today = tk.Label(header, text="",
-                                        font=(FONT_FAMILY, 12),
-                                        bg=COLOR_PRIMARY, fg="#e6f7ff")
-        self.lbl_total_today.pack(side=tk.RIGHT, padx=16, pady=10)
-
     def _build_status_bar(self):
-        status_bar = tk.Frame(self.root, bg=COLOR_BG, height=26)
+        status_bar = ttk.Frame(self.root, padding=(9, 4))
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        status_bar.pack_propagate(False)
-
-        self.lbl_status = tk.Label(status_bar, text="", font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                                   bg=COLOR_BG, fg=COLOR_TEXT_SECONDARY)
-        self.lbl_status.pack(side=tk.LEFT, padx=10, pady=3)
-
-        self.lbl_last_seen = tk.Label(status_bar, text="",
-                                      font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                                      bg=COLOR_BG, fg=COLOR_TEXT_SECONDARY)
-        self.lbl_last_seen.pack(side=tk.RIGHT, padx=10, pady=3)
+        self.lbl_status = ttk.Label(status_bar, style="Muted.TLabel")
+        self.lbl_status.pack(side=tk.LEFT)
 
     def _update_status_bar(self):
         if self.monitor.is_running:
-            self.lbl_status.config(text="● 监控运行中")
+            self.lbl_status.config(text="● 监控运行中", foreground=COLOR_SUCCESS)
         else:
-            self.lbl_status.config(text="○ 监控已停止", fg=COLOR_DANGER)
+            self.lbl_status.config(text="○ 监控已停止", foreground=COLOR_DANGER)
 
     # ==================== TAB 1: 今日统计 ====================
 
     def _build_today_tab(self):
         frame = self.tab_today
-        frame.configure(bg=COLOR_BG)
+        ctrl = ttk.Frame(frame, padding=(0, 6))
+        ctrl.pack(fill=tk.X)
+        for label, style, action in (
+            ("刷新", "TButton", self._refresh_today),
+            ("重置今日", "Danger.TButton", self._reset_today),
+            ("切换到选中应用", "Primary.TButton", self._launch_selected),
+        ):
+            ttk.Button(ctrl, text=label, style=style, command=action).pack(
+                side=tk.RIGHT, padx=(4, 0))
+        self.lbl_total_today = ttk.Label(ctrl, style="Summary.TLabel")
+        self.lbl_total_today.pack(side=tk.LEFT)
 
-        # 控制栏
-        ctrl = tk.Frame(frame, bg=COLOR_BG)
-        ctrl.pack(fill=tk.X, padx=12, pady=(12, 6))
-
-        tk.Label(ctrl, text="今日应用使用统计",
-                 font=(FONT_FAMILY, FONT_SIZE_TITLE, "bold"),
-                 bg=COLOR_BG, fg=COLOR_TEXT).pack(side=tk.LEFT)
-
-        btn_refresh = ttk.Button(ctrl, text="刷新", style="Small.TButton",
-                                 command=self._refresh_today)
-        btn_refresh.pack(side=tk.RIGHT, padx=4)
-
-        btn_reset = ttk.Button(ctrl, text="重置今日", style="Danger.TButton",
-                               command=self._reset_today)
-        btn_reset.pack(side=tk.RIGHT, padx=4)
-
-        # 概览卡片区域
-        self.cards_frame = tk.Frame(frame, bg=COLOR_BG)
-        self.cards_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
-
-        # Treeview 详情
-        tree_frame = tk.Frame(frame, bg=COLOR_CARD_BG)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
-
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
         columns = ("rank", "display_name", "process", "count", "status")
         self.today_tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
-                                       selectmode="browse")
+                                       selectmode="browse", height=9)
+        heading_font = font.Font(root=self.root, font=(FONT_FAMILY, FONT_SIZE_SMALL, "bold"))
+        for key, label, width, anchor, stretch in (
+            ("rank", "#", 32, "center", False),
+            ("display_name", "软件名称", 150, "w", True),
+            ("process", "进程名", 130, "w", True),
+            ("count", "使用次数", 72, "center", False),
+            ("status", "状态", 88, "center", False),
+        ):
+            self.today_tree.heading(key, text=label, anchor=anchor)
+            self.today_tree.column(key, width=max(width, heading_font.measure(label) + 16),
+                                   anchor=anchor, stretch=stretch)
 
-        self.today_tree.heading("rank", text="#")
-        self.today_tree.heading("display_name", text="软件名称")
-        self.today_tree.heading("process", text="进程名")
-        self.today_tree.heading("count", text="今日使用")
-        self.today_tree.heading("status", text="状态")
-
-        self.today_tree.column("rank", width=45, anchor="center")
-        self.today_tree.column("display_name", width=200)
-        self.today_tree.column("process", width=140)
-        self.today_tree.column("count", width=100, anchor="center")
-        self.today_tree.column("status", width=80, anchor="center")
-
-        # 双击行 → 启动/切换
-        self.today_tree.bind("<Double-1>", lambda e: self._launch_selected())
-
-        # 滚动条
+        self.today_tree.bind("<Double-1>", lambda event: self._launch_selected()
+                             if self.today_tree.identify_row(event.y) else None)
+        self.today_tree.bind("<Return>", lambda event: self._launch_selected())
         scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.today_tree.yview)
         self.today_tree.configure(yscrollcommand=scrollbar.set)
-
-        self.today_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.today_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # 底部启动按钮
-        action_frame = tk.Frame(frame, bg=COLOR_BG)
-        action_frame.pack(fill=tk.X, padx=12, pady=(0, 10))
-        tk.Button(action_frame, text="▶ 切换到选中应用", font=(FONT_FAMILY, FONT_SIZE),
-                  bg=COLOR_PRIMARY, fg="white", relief="flat", padx=16, pady=5,
-                  cursor="hand2", command=self._launch_selected).pack(side=tk.LEFT)
-        tk.Label(action_frame, text="  双击行也可以切换",
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                 bg=COLOR_BG, fg=COLOR_TEXT_SECONDARY).pack(side=tk.LEFT, padx=8)
-
-        # 标签颜色
         self.today_tree.tag_configure("running", foreground=COLOR_SUCCESS)
         self.today_tree.tag_configure("not_running", foreground=COLOR_TEXT_SECONDARY)
-        self.today_tree.tag_configure("disabled", foreground="#bfbfbf")
-
-        # item iid -> process name 映射
-        self._today_tree_map: dict[str, str] = {}
+        self.today_tree.tag_configure("disabled", foreground=COLOR_TEXT_SECONDARY)
+        self.today_tree.tag_configure("alternate", background=COLOR_BG)
 
     def _refresh_today(self):
         """刷新今日统计页面"""
-        # 清空卡片
-        for w in self.cards_frame.winfo_children():
-            w.destroy()
-
         counts = self.config.get_today_counts()
         enabled = self.config.get_enabled_processes()
         total = sum(counts.get(p, 0) for p in enabled)
+        active = sum(1 for p in enabled if counts.get(p, 0) > 0)
+        self.lbl_total_today.config(text=f"今日 {total} 次 · {active}/{len(enabled)} 款有使用")
 
-        # 顶部总计卡片
-        self.lbl_total_today.config(text=f"今日总计: {total} 次")
-
-        # 统计卡片
-        active_count = sum(1 for p in enabled if counts.get(p, 0) > 0)
-        unique_text = f"{len(enabled)} 个监控中 | {active_count} 个今日有活动"
-
-        card = tk.Frame(self.cards_frame, bg=COLOR_CARD_BG, relief="solid", bd=1)
-        card.pack(fill=tk.X, pady=4)
-
-        tk.Label(card, text=str(total), font=(FONT_FAMILY, 28, "bold"),
-                 bg=COLOR_CARD_BG, fg=COLOR_PRIMARY).pack(side=tk.LEFT, padx=20, pady=12)
-        info_frame = tk.Frame(card, bg=COLOR_CARD_BG)
-        info_frame.pack(side=tk.LEFT, padx=4, pady=12)
-        tk.Label(info_frame, text="今日使用总次数",
-                 font=(FONT_FAMILY, 11, "bold"), bg=COLOR_CARD_BG, fg=COLOR_TEXT).pack(anchor="w")
-        tk.Label(info_frame, text=unique_text,
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL), bg=COLOR_CARD_BG,
-                 fg=COLOR_TEXT_SECONDARY).pack(anchor="w")
+        selection = self.today_tree.selection()
+        position = self.today_tree.yview()[0]
 
         # 刷新 Treeview
         self.today_tree.delete(*self.today_tree.get_children())
@@ -453,26 +423,28 @@ class AppCounterGUI:
             status = "● 运行中" if running else ("○ 未使用" if is_enabled else "已禁用")
             tag = "running" if running else ("disabled" if not is_enabled else "not_running")
             values = (i, dname, proc, cnt, status)
-            item_id = self.today_tree.insert("", tk.END, values=values, tags=(tag,))
-            self._today_tree_map[item_id] = proc
+            tags = (tag, "alternate") if i % 2 == 0 else (tag,)
+            self.today_tree.insert("", tk.END, iid=proc, values=values, tags=tags)
+        if selection and self.today_tree.exists(selection[0]):
+            self.today_tree.selection_set(selection[0])
+            self.today_tree.focus(selection[0])
+        self.today_tree.yview_moveto(position)
 
     def _launch_selected(self):
         """启动/切换到 today_tree 中选中的应用"""
         sel = self.today_tree.selection()
         if not sel:
             return
-        proc = self._today_tree_map.get(sel[0], "")
-        if not proc:
-            return
+        proc = sel[0]
         exe_path = self.config.get_exe_path(proc)
         ok = ProcessMonitor.focus_or_launch(proc, exe_path)
         if not ok:
-            messagebox.showinfo("提示", f"无法启动 {proc}，请检查程序路径。")
+            DarkDialog(self.root, "提示", f"无法启动 {proc}，请检查程序路径。")
         # 刷新运行状态
         self._refresh_today()
 
     def _reset_today(self):
-        if messagebox.askyesno("确认", "确定要重置今日计数吗？\n此操作不可撤销！"):
+        if DarkDialog(self.root, "重置今日", "确定要重置今日计数吗？\n此操作不可撤销。", confirm=True).result:
             self.config.reset_today()
             self._refresh_today()
 
@@ -484,92 +456,60 @@ class AppCounterGUI:
 
     def _build_history_tab(self):
         frame = self.tab_history
-        frame.configure(bg=COLOR_BG)
+        dates = ttk.Frame(frame, padding=(0, 6))
+        dates.pack(fill=tk.X)
+        entries = []
+        for label in ("从", "到"):
+            ttk.Label(dates, text=label, style="Muted.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+            entry = ttk.Entry(dates, width=11)
+            entry.pack(side=tk.LEFT)
+            entry.bind("<Return>", lambda event: self._query_history())
+            ttk.Button(dates, text="日历", command=lambda e=entry: DatePicker(dates, e)).pack(
+                side=tk.LEFT, padx=(3, 8))
+            entries.append(entry)
+        self.entry_start, self.entry_end = entries
+        ttk.Button(dates, text="查询", style="Primary.TButton", command=self._query_history).pack(
+            side=tk.LEFT)
 
-        # 控制栏
-        ctrl = tk.Frame(frame, bg=COLOR_BG)
-        ctrl.pack(fill=tk.X, padx=12, pady=(12, 6))
+        presets = ttk.Frame(frame, padding=(0, 0, 0, 6))
+        presets.pack(fill=tk.X)
+        self.history_summary = ttk.Label(presets, style="Summary.TLabel")
+        self.history_summary.pack(side=tk.RIGHT)
+        for label, days in [("今天", 0), ("近3天", 3), ("近7天", 7),
+                            ("近30天", 30), ("全部", -1)]:
+            ttk.Button(presets, text=label, command=lambda d=days: self._quick_query(d)).pack(
+                side=tk.LEFT, padx=(0, 4))
 
-        tk.Label(ctrl, text="历史统计",
-                 font=(FONT_FAMILY, FONT_SIZE_TITLE, "bold"),
-                 bg=COLOR_BG, fg=COLOR_TEXT).pack(side=tk.LEFT)
-
-        # 日期范围选择
-        range_frame = tk.Frame(ctrl, bg=COLOR_BG)
-        range_frame.pack(side=tk.RIGHT)
-
-        tk.Label(range_frame, text="从", bg=COLOR_BG, fg=COLOR_TEXT_SECONDARY,
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL)).pack(side=tk.LEFT, padx=(8, 2))
-        self.entry_start = ttk.Entry(range_frame, width=12, font=(FONT_FAMILY, FONT_SIZE_SMALL))
-        self.entry_start.pack(side=tk.LEFT, padx=2)
-        self.entry_start.insert(0, (date.today() - timedelta(days=7)).isoformat())
-        tk.Button(range_frame, text="📅", font=(FONT_FAMILY, 8), relief="flat", bd=0,
-                  bg=COLOR_BG, cursor="hand2",
-                  command=lambda: DatePicker(range_frame, self.entry_start)
-                  ).pack(side=tk.LEFT)
-
-        tk.Label(range_frame, text="到", bg=COLOR_BG, fg=COLOR_TEXT_SECONDARY,
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL)).pack(side=tk.LEFT, padx=(4, 2))
-        self.entry_end = ttk.Entry(range_frame, width=12, font=(FONT_FAMILY, FONT_SIZE_SMALL))
-        self.entry_end.pack(side=tk.LEFT, padx=2)
-        self.entry_end.insert(0, date.today().isoformat())
-        tk.Button(range_frame, text="📅", font=(FONT_FAMILY, 8), relief="flat", bd=0,
-                  bg=COLOR_BG, cursor="hand2",
-                  command=lambda: DatePicker(range_frame, self.entry_end)
-                  ).pack(side=tk.LEFT)
-
-        btn_query = ttk.Button(range_frame, text="查询", style="Small.TButton",
-                               command=self._query_history)
-        btn_query.pack(side=tk.LEFT, padx=(8, 0))
-
-        # 快捷周期
-        quick_frame = tk.Frame(frame, bg=COLOR_BG)
-        quick_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
-        for label, days in [("今天", 0), ("最近3天", 3), ("最近7天", 7),
-                            ("最近30天", 30), ("全部", -1)]:
-            btn = ttk.Button(quick_frame, text=label, style="Small.TButton",
-                             command=lambda d=days: self._quick_query(d))
-            btn.pack(side=tk.LEFT, padx=2)
-
-        # 汇总卡片
-        self.history_summary_frame = tk.Frame(frame, bg=COLOR_BG)
-        self.history_summary_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
-
-        # 详情表格
-        tree_frame = tk.Frame(frame, bg=COLOR_CARD_BG)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
-
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
         columns = ("rank", "display_name", "process", "count")
         self.history_tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
-                                         selectmode="none")
+                                         selectmode="none", height=8)
+        heading_font = font.Font(root=self.root, font=(FONT_FAMILY, FONT_SIZE_SMALL, "bold"))
+        for key, label, width, anchor, stretch in (
+            ("rank", "#", 32, "center", False),
+            ("display_name", "软件名称", 170, "w", True),
+            ("process", "进程名", 140, "w", True),
+            ("count", "使用次数", 88, "center", False),
+        ):
+            self.history_tree.heading(key, text=label, anchor=anchor)
+            self.history_tree.column(key, width=max(width, heading_font.measure(label) + 16),
+                                     anchor=anchor, stretch=stretch)
+        self.history_tree.tag_configure("alternate", background=COLOR_BG)
 
-        self.history_tree.heading("rank", text="#")
-        self.history_tree.heading("display_name", text="软件名称")
-        self.history_tree.heading("process", text="进程名")
-        self.history_tree.heading("count", text="使用次数")
-
-        self.history_tree.column("rank", width=45, anchor="center")
-        self.history_tree.column("display_name", width=220)
-        self.history_tree.column("process", width=200)
-        self.history_tree.column("count", width=150, anchor="center")
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL,
-                                  command=self.history_tree.yview)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.history_tree.yview)
         self.history_tree.configure(yscrollcommand=scrollbar.set)
-
-        self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 默认加载最近7天
+        self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._quick_query(7)
 
     def _quick_query(self, days: int):
         """快捷日期查询"""
         end = date.today()
-        if days <= 0:
+        if days < 0:
             start = date(2000, 1, 1)
         else:
-            start = end - timedelta(days=days - 1)
+            start = end - timedelta(days=max(0, days - 1))
         self.entry_start.delete(0, tk.END)
         self.entry_start.insert(0, start.isoformat())
         self.entry_end.delete(0, tk.END)
@@ -580,33 +520,15 @@ class AppCounterGUI:
         start = self.entry_start.get().strip()
         end = self.entry_end.get().strip()
         if not start or not end:
-            messagebox.showwarning("提示", "请输入日期范围 (YYYY-MM-DD)")
+            DarkDialog(self.root, "日期范围", "请输入日期范围（YYYY-MM-DD）。")
             return
 
         counts = self.config.get_range_counts(start, end)
-        enabled = self.config.get_enabled_processes()
         display_map = {p: info["display_name"]
                        for p, info in self.config.watchlist.items()}
 
-        # 清空
         self.history_tree.delete(*self.history_tree.get_children())
-        for w in self.history_summary_frame.winfo_children():
-            w.destroy()
-
-        total_all = sum(counts.values())
-
-        # 汇总卡片
-        card = tk.Frame(self.history_summary_frame, bg=COLOR_CARD_BG, relief="solid", bd=1)
-        card.pack(fill=tk.X, pady=4)
-        tk.Label(card, text=str(total_all), font=(FONT_FAMILY, 28, "bold"),
-                 bg=COLOR_CARD_BG, fg=COLOR_PRIMARY).pack(side=tk.LEFT, padx=20, pady=10)
-        info_f = tk.Frame(card, bg=COLOR_CARD_BG)
-        info_f.pack(side=tk.LEFT, padx=4, pady=10)
-        tk.Label(info_f, text=f"日期范围: {start} ~ {end}",
-                 font=(FONT_FAMILY, 11, "bold"), bg=COLOR_CARD_BG, fg=COLOR_TEXT).pack(anchor="w")
-        tk.Label(info_f, text=f"共 {len(counts)} 款应用有记录",
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL), bg=COLOR_CARD_BG,
-                 fg=COLOR_TEXT_SECONDARY).pack(anchor="w")
+        self.history_summary.config(text=f"{sum(counts.values())} 次 · {len(counts)} 款应用")
 
         # 填充表格
         rows = []
@@ -616,167 +538,108 @@ class AppCounterGUI:
         rows.sort(key=lambda x: -x[2])
 
         for i, (dname, proc, cnt) in enumerate(rows, 1):
-            self.history_tree.insert("", tk.END, values=(i, dname, proc, cnt))
+            tags = ("alternate",) if i % 2 == 0 else ()
+            self.history_tree.insert("", tk.END, values=(i, dname, proc, cnt), tags=tags)
 
     # ==================== TAB 3: 软件管理 ====================
 
     def _build_manage_tab(self):
         frame = self.tab_manage
-        frame.configure(bg=COLOR_BG)
-
-        # 控制栏
-        ctrl = tk.Frame(frame, bg=COLOR_BG)
-        ctrl.pack(fill=tk.X, padx=12, pady=(12, 6))
-
-        tk.Label(ctrl, text="监控软件管理",
-                 font=(FONT_FAMILY, FONT_SIZE_TITLE, "bold"),
-                 bg=COLOR_BG, fg=COLOR_TEXT).pack(side=tk.LEFT)
-
-        btn_scan = ttk.Button(ctrl, text="扫描运行中应用", style="Primary.TButton",
-                              command=self._scan_running_apps)
-        btn_scan.pack(side=tk.RIGHT, padx=4)
-
-        btn_add = ttk.Button(ctrl, text="＋ 手动添加", style="Small.TButton",
-                             command=self._add_custom_app)
-        btn_add.pack(side=tk.RIGHT, padx=4)
-
-        btn_refresh = ttk.Button(ctrl, text="刷新", style="Small.TButton",
-                                 command=self._refresh_manage)
-        btn_refresh.pack(side=tk.RIGHT, padx=4)
-
-        # 提示文字
-        hint = tk.Label(frame,
-                        text="💡 提示：启用/禁用的修改即时生效。默认软件不可删除，但可以禁用或重命名。",
-                        font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                        bg=COLOR_BG, fg=COLOR_TEXT_SECONDARY, anchor="w")
-        hint.pack(fill=tk.X, padx=12, pady=(0, 6))
-
-        # 搜索框
-        search_frame = tk.Frame(frame, bg=COLOR_BG)
-        search_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
-        tk.Label(search_frame, text="搜索:", bg=COLOR_BG,
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL)).pack(side=tk.LEFT, padx=(0, 4))
+        ctrl = ttk.Frame(frame, padding=(0, 6))
+        ctrl.pack(fill=tk.X)
+        for label, style, action in (
+            ("扫描运行中应用", "Primary.TButton", self._scan_running_apps),
+            ("手动添加", "TButton", self._add_custom_app),
+            ("刷新", "TButton", self._refresh_manage),
+        ):
+            ttk.Button(ctrl, text=label, style=style, command=action).pack(
+                side=tk.RIGHT, padx=(4, 0))
+        ttk.Label(ctrl, text="搜索", style="Muted.TLabel").pack(side=tk.LEFT, padx=(0, 4))
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *a: self._filter_manage_list())
-        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
-        search_entry.pack(side=tk.LEFT)
+        self.search_var.trace_add("write", lambda *args: self._filter_manage_list())
+        ttk.Entry(ctrl, textvariable=self.search_var, width=12).pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
 
-        # 列表区域（Canvas + Scrollbar + Frame 实现滚动）
-        self.manage_canvas = tk.Canvas(frame, bg=COLOR_BG, highlightthickness=0)
-        manage_scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.manage_canvas.yview)
-        self.manage_list_frame = tk.Frame(self.manage_canvas, bg=COLOR_BG)
-
-        self.manage_list_frame.bind("<Configure>",
-                                    lambda e: self.manage_canvas.configure(
-                                        scrollregion=self.manage_canvas.bbox("all")))
-        self.manage_canvas.create_window((0, 0), window=self.manage_list_frame, anchor="nw")
-        self.manage_canvas.configure(yscrollcommand=manage_scrollbar.set)
-
-        self.manage_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
-        manage_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=(0, 12))
-
-        # 绑定鼠标滚轮
-        self.manage_canvas.bind("<Enter>", lambda e: self._bind_mousewheel(e))
-        self.manage_canvas.bind("<Leave>", lambda e: self._unbind_mousewheel(e))
-
+        self.manage_canvas, self.manage_list_frame = self._scrolling_list(frame)
+        self.root.bind("<MouseWheel>", lambda event: self.manage_canvas.yview_scroll(
+            -int(event.delta / 120), "units") if self.notebook.select() == str(frame) else None)
         self._all_manage_rows = []
 
-    def _bind_mousewheel(self, event):
-        self.manage_canvas.bind_all("<MouseWheel>",
-                                    lambda e: self.manage_canvas.yview_scroll(
-                                        int(-1 * (e.delta / 120)), "units"))
-
-    def _unbind_mousewheel(self, event):
-        self.manage_canvas.unbind_all("<MouseWheel>")
+    @staticmethod
+    def _scrolling_list(parent):
+        area = ttk.Frame(parent)
+        area.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(area, bg=COLOR_BG, highlightthickness=0, width=0, height=0,
+                           yscrollincrement=16)
+        scrollbar = ttk.Scrollbar(area, orient=tk.VERTICAL, command=canvas.yview)
+        list_frame = ttk.Frame(canvas)
+        content = canvas.create_window((0, 0), window=list_frame, anchor="nw")
+        list_frame.bind("<Configure>", lambda event: canvas.configure(
+            scrollregion=canvas.bbox(content)))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(content, width=event.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        return canvas, list_frame
 
     def _refresh_manage(self):
         """刷新软件管理列表"""
-        for w in self.manage_list_frame.winfo_children():
-            w.destroy()
-        self._all_manage_rows = []
-
         items = self.config.get_all_processes()
-        self._all_manage_rows = items
-        self._render_manage_rows(items)
+        if items != self._all_manage_rows or not self.manage_list_frame.winfo_children():
+            self._all_manage_rows = items
+            self._filter_manage_list()
 
     def _filter_manage_list(self):
         query = self.search_var.get().lower().strip()
-        if not query:
-            self._render_manage_rows(self._all_manage_rows)
-        else:
-            filtered = [item for item in self._all_manage_rows
-                        if query in item["display_name"].lower()
-                        or query in item["process"].lower()]
-            self._render_manage_rows(filtered)
+        items = [item for item in self._all_manage_rows
+                 if query in item["display_name"].lower() or query in item["process"].lower()]
+        self._render_manage_rows(items)
 
     def _render_manage_rows(self, items):
-        for w in self.manage_list_frame.winfo_children():
-            w.destroy()
-
+        for widget in self.manage_list_frame.winfo_children():
+            widget.destroy()
         for item in items:
             self._create_manage_row(self.manage_list_frame, item)
-
-        # 更新 canvas 宽度
+        if not items:
+            ttk.Label(self.manage_list_frame, text="没有匹配的软件", style="Muted.TLabel").pack(
+                anchor="w", pady=5)
         self.manage_list_frame.update_idletasks()
-        self.manage_canvas.configure(scrollregion=self.manage_canvas.bbox("all"))
 
     def _create_manage_row(self, parent, item: dict):
-        """创建单行管理卡片"""
         proc = item["process"]
         dname = item["display_name"]
         enabled = item["enabled"]
         is_default = item["is_default"]
 
-        row = tk.Frame(parent, bg=COLOR_CARD_BG, relief="solid", bd=1)
-        row.pack(fill=tk.X, pady=2, padx=2)
-
-        # 图标占位
-        icon_label = tk.Label(row, text="📱", font=(FONT_FAMILY, 18), bg=COLOR_CARD_BG)
-        icon_label.pack(side=tk.LEFT, padx=(12, 8), pady=8)
-
-        # 信息
-        info = tk.Frame(row, bg=COLOR_CARD_BG)
-        info.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=6)
-
-        name_text = dname
-        if not enabled:
-            name_text += " (已禁用)"
-        name_color = COLOR_TEXT if enabled else COLOR_TEXT_SECONDARY
-        tk.Label(info, text=name_text,
-                 font=(FONT_FAMILY, 11, "bold"), bg=COLOR_CARD_BG,
-                 fg=name_color).pack(anchor="w")
-        tk.Label(info, text=f"进程: {proc}" + (" | 默认" if is_default else " | 自定义"),
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL), bg=COLOR_CARD_BG,
-                 fg=COLOR_TEXT_SECONDARY).pack(anchor="w")
-
-        # 操作按钮
-        btn_frame = tk.Frame(row, bg=COLOR_CARD_BG)
-        btn_frame.pack(side=tk.RIGHT, padx=8, pady=8)
-
-        # 启用/禁用
-        toggle_text = "禁用" if enabled else "启用"
-        toggle_style = "Small.TButton" if enabled else "Primary.TButton"
-        ttk.Button(btn_frame, text=toggle_text, style=toggle_style,
-                   command=lambda p=proc: self._toggle_app(p)).pack(side=tk.LEFT, padx=2)
-
-        # 重命名
-        ttk.Button(btn_frame, text="重命名", style="Small.TButton",
-                   command=lambda p=proc, d=dname: self._rename_app(p, d)).pack(side=tk.LEFT, padx=2)
-
-        # 删除（仅自定义）
+        row = tk.Frame(parent, bg=COLOR_CARD_BG)
+        row.pack(fill=tk.X, pady=(0, 2))
+        buttons = ttk.Frame(row, style="Card.TFrame")
+        buttons.pack(side=tk.RIGHT, padx=6, pady=4)
+        ttk.Button(buttons, text="禁用" if enabled else "启用",
+                   style="TButton" if enabled else "Primary.TButton",
+                   command=lambda: self._toggle_app(proc)).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="重命名", command=lambda: self._rename_app(proc, dname)).pack(
+            side=tk.LEFT, padx=(4, 0))
         if not is_default:
-            ttk.Button(btn_frame, text="删除", style="Danger.TButton",
-                       command=lambda p=proc: self._delete_app(p)).pack(side=tk.LEFT, padx=2)
+            ttk.Button(buttons, text="删除", style="Danger.TButton",
+                       command=lambda: self._delete_app(proc)).pack(side=tk.LEFT, padx=(4, 0))
+
+        info = ttk.Frame(row, style="Card.TFrame")
+        info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0), pady=2)
+        ttk.Label(info, text=dname if enabled else f"{dname}（已禁用）",
+                  style="Card.TLabel", anchor="w").pack(fill=tk.X)
+        ttk.Label(info, text=f"{proc} · {'默认' if is_default else '自定义'}",
+                  style="Detail.Card.TLabel", anchor="w").pack(fill=tk.X)
 
     def _toggle_app(self, proc: str):
-        new_state = self.config.toggle_enabled(proc)
+        self.config.toggle_enabled(proc)
         self.monitor.refresh_baseline()
         self._refresh_manage()
         self._refresh_today()
 
     def _rename_app(self, proc: str, current_name: str):
-        new_name = simpledialog.askstring("重命名", f"为 {proc} 输入新显示名称:",
-                                          initialvalue=current_name, parent=self.root)
+        new_name = DarkDialog(self.root, "重命名", f"{proc} 的显示名称",
+                              initial=current_name).result
         if new_name and new_name.strip():
             self.config.rename_display(proc, new_name.strip())
             self._refresh_manage()
@@ -784,7 +647,8 @@ class AppCounterGUI:
 
     def _delete_app(self, proc: str):
         dname = self.config.watchlist.get(proc, {}).get("display_name", proc)
-        if messagebox.askyesno("确认删除", f"确定要删除自定义软件 \"{dname}\" ({proc}) 吗？"):
+        if DarkDialog(self.root, "确认删除", f"确定要删除「{dname}」（{proc}）吗？",
+                      confirm=True).result:
             self.config.remove_custom(proc)
             self._refresh_manage()
             self._refresh_today()
@@ -854,97 +718,67 @@ class AppCounterGUI:
         new_apps = {k: v for k, v in discovered.items() if k not in existing}
 
         if not new_apps:
-            messagebox.showinfo("扫描结果", "没有发现新的可监控应用。\n所有运行中的应用已在监控列表中。")
+            DarkDialog(self.root, "扫描结果", "没有发现新的可监控应用。")
             return
 
         # 弹出选择对话框
         self._show_scan_dialog(new_apps)
 
-    def _show_scan_dialog(self, apps: dict):
-        """显示扫描结果对话框，勾选要添加的应用"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("扫描运行中应用")
-        dialog.geometry("520x420")
-        dialog.configure(bg=COLOR_BG)
+    def _new_dialog(self, title):
+        dialog = tk.Toplevel(self.root, bg=COLOR_BG)
+        dialog.withdraw()
+        dialog.title(title)
         dialog.transient(self.root)
-        dialog.grab_set()
+        dialog.resizable(False, False)
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
+        return dialog
 
-        # 居中
+    def _show_dialog(self, dialog):
         dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 520) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 420) // 2
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_reqwidth()) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_reqheight()) // 2
         dialog.geometry(f"+{x}+{y}")
+        dialog.deiconify()
+        _dark_titlebar(dialog)
+        dialog.grab_set()
+        dialog.focus_set()
 
-        # 标题
-        header = tk.Frame(dialog, bg=COLOR_BG)
-        header.pack(fill=tk.X, padx=16, pady=(12, 8))
-        tk.Label(header, text=f"发现 {len(apps)} 个未监控的应用",
-                 font=(FONT_FAMILY, 13, "bold"), bg=COLOR_BG, fg=COLOR_TEXT).pack(side=tk.LEFT)
+    def _show_scan_dialog(self, apps: dict):
+        """勾选要添加的应用"""
+        dialog = self._new_dialog("扫描运行中应用")
+        body = ttk.Frame(dialog, padding=9)
+        body.pack(fill=tk.BOTH, expand=True)
 
-        # 全选/取消
-        sel_frame = tk.Frame(dialog, bg=COLOR_BG)
-        sel_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
+        controls = ttk.Frame(body)
+        controls.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(controls, text=f"发现 {len(apps)} 款应用", style="Summary.TLabel").pack(side=tk.LEFT)
 
-        def select_all():
-            for var in check_vars.values():
-                var.set(True)
-
-        def deselect_all():
-            for var in check_vars.values():
-                var.set(False)
-
-        tk.Button(sel_frame, text="全选", font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                  bg=COLOR_BORDER, relief="flat", padx=8, pady=2,
-                  command=select_all).pack(side=tk.LEFT, padx=(0, 4))
-        tk.Button(sel_frame, text="取消全选", font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                  bg=COLOR_BORDER, relief="flat", padx=8, pady=2,
-                  command=deselect_all).pack(side=tk.LEFT)
-
-        # 可滚动列表
-        canvas = tk.Canvas(dialog, bg=COLOR_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(dialog, orient=tk.VERTICAL, command=canvas.yview)
-        list_frame = tk.Frame(canvas, bg=COLOR_BG)
-
-        list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=list_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=(0, 8))
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 12), pady=(0, 8))
-
-        # 绑定滚轮
-        canvas.bind("<Enter>", lambda e: canvas.bind_all(
-            "<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
-        # 创建勾选项
         check_vars = {}
-        proc_names = sorted(apps.keys(), key=lambda k: apps[k]["display"])
 
-        for proc_name in proc_names:
-            info = apps[proc_name]
+        def select_all(value):
+            for var in check_vars.values():
+                var.set(value)
+
+        ttk.Button(controls, text="取消全选", command=lambda: select_all(False)).pack(side=tk.RIGHT)
+        ttk.Button(controls, text="全选", command=lambda: select_all(True)).pack(
+            side=tk.RIGHT, padx=(0, 4))
+
+        canvas, list_frame = self._scrolling_list(body)
+        dialog.bind("<MouseWheel>", lambda event: canvas.yview_scroll(
+            -int(event.delta / 120), "units"))
+        for proc_name in sorted(apps, key=lambda key: apps[key]["display"]):
             var = tk.BooleanVar(value=True)
             check_vars[proc_name] = var
+            row = ttk.Frame(list_frame, style="Card.TFrame", padding=(5, 3))
+            row.pack(fill=tk.X, pady=(0, 2))
+            ttk.Checkbutton(row, variable=var, text=apps[proc_name]["display"],
+                            style="Card.TCheckbutton").pack(fill=tk.X)
+            ttk.Label(row, text=proc_name, style="Detail.Card.TLabel").pack(
+                fill=tk.X, padx=(19, 0))
 
-            row = tk.Frame(list_frame, bg=COLOR_CARD_BG, relief="solid", bd=1)
-            row.pack(fill=tk.X, pady=1, padx=2)
-
-            cb = tk.Checkbutton(row, variable=var, bg=COLOR_CARD_BG,
-                                activebackground=COLOR_CARD_BG)
-            cb.pack(side=tk.LEFT, padx=(8, 4), pady=6)
-
-            info_f = tk.Frame(row, bg=COLOR_CARD_BG)
-            info_f.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=4)
-            tk.Label(info_f, text=info["display"],
-                     font=(FONT_FAMILY, FONT_SIZE, "bold"), bg=COLOR_CARD_BG,
-                     fg=COLOR_TEXT).pack(anchor="w")
-            tk.Label(info_f, text=f"进程: {proc_name}",
-                     font=(FONT_FAMILY, FONT_SIZE_SMALL), bg=COLOR_CARD_BG,
-                     fg=COLOR_TEXT_SECONDARY).pack(anchor="w")
-
-        # 底部按钮
-        btn_frame = tk.Frame(dialog, bg=COLOR_BG)
-        btn_frame.pack(fill=tk.X, padx=16, pady=(6, 12))
+        dialog.update_idletasks()
+        canvas.configure(width=max(380, controls.winfo_reqwidth()),
+                         height=min(230, list_frame.winfo_reqheight()))
 
         def do_import():
             count = 0
@@ -953,93 +787,55 @@ class AppCounterGUI:
                     info = apps[proc_name]
                     self.config.add_custom(proc_name, info["display"], info.get("path", ""))
                     count += 1
-            if count > 0:
+            if count:
                 self.monitor.refresh_baseline()
                 self._refresh_manage()
                 self._refresh_today()
-                messagebox.showinfo("导入完成", f"已添加 {count} 个应用。", parent=dialog)
+                DarkDialog(dialog, "导入完成", f"已添加 {count} 款应用。")
             dialog.destroy()
 
-        tk.Button(btn_frame, text="添加选中", font=(FONT_FAMILY, FONT_SIZE),
-                  bg=COLOR_PRIMARY, fg="white", relief="flat", padx=20, pady=5,
-                  command=do_import).pack(side=tk.RIGHT, padx=(4, 0))
-        tk.Button(btn_frame, text="取消", font=(FONT_FAMILY, FONT_SIZE),
-                  bg=COLOR_BORDER, fg=COLOR_TEXT, relief="flat", padx=20, pady=5,
-                  command=dialog.destroy).pack(side=tk.RIGHT)
+        actions = ttk.Frame(body)
+        actions.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(actions, text="添加选中", style="Primary.TButton",
+                   command=do_import).pack(side=tk.RIGHT)
+        ttk.Button(actions, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 4))
+        self._show_dialog(dialog)
 
     def _add_custom_app(self):
-        """弹出对话框添加自定义软件"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("添加自定义软件")
-        dialog.geometry("480x280")
-        dialog.resizable(False, False)
-        dialog.configure(bg=COLOR_CARD_BG)
-        dialog.transient(self.root)
-        dialog.grab_set()
+        dialog = self._new_dialog("添加自定义软件")
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Button(body, text="选择程序文件 (.exe)",
+                   command=lambda: self._browse_exe(dialog, entry_proc, entry_name)
+                   ).pack(anchor="w", pady=(0, 8))
 
-        # 居中
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 480) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 280) // 2
-        dialog.geometry(f"+{x}+{y}")
-
-        # 内容
-        pad_frame = tk.Frame(dialog, bg=COLOR_CARD_BG)
-        pad_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=16)
-
-        tk.Label(pad_frame, text="添加要监控的软件",
-                 font=(FONT_FAMILY, 14, "bold"), bg=COLOR_CARD_BG,
-                 fg=COLOR_TEXT).pack(anchor="w", pady=(0, 12))
-
-        # 选择路径按钮（醒目）
-        path_frame = tk.Frame(pad_frame, bg=COLOR_CARD_BG)
-        path_frame.pack(fill=tk.X, pady=(0, 10))
-        tk.Button(path_frame, text="📁 选择程序文件 (.exe)", font=(FONT_FAMILY, FONT_SIZE),
-                  bg=COLOR_PRIMARY, fg="white", relief="flat", padx=12, pady=6,
-                  command=lambda: self._browse_exe(dialog, entry_proc, entry_name)).pack()
-
-        # 进程名
-        tk.Label(pad_frame, text="进程名称 (自动从路径提取):",
-                 font=(FONT_FAMILY, FONT_SIZE), bg=COLOR_CARD_BG,
-                 fg=COLOR_TEXT).pack(anchor="w")
-        entry_proc = ttk.Entry(pad_frame, width=45)
-        entry_proc.pack(fill=tk.X, pady=(2, 4))
-
-        # 显示名称
-        tk.Label(pad_frame, text="显示名称:",
-                 font=(FONT_FAMILY, FONT_SIZE), bg=COLOR_CARD_BG,
-                 fg=COLOR_TEXT).pack(anchor="w")
-        entry_name = ttk.Entry(pad_frame, width=45)
-        entry_name.pack(fill=tk.X, pady=(2, 10))
-
-        # 按钮
-        btn_frame = tk.Frame(pad_frame, bg=COLOR_CARD_BG)
-        btn_frame.pack(fill=tk.X)
+        ttk.Label(body, text="进程名称").pack(anchor="w")
+        entry_proc = ttk.Entry(body, width=34)
+        entry_proc.pack(fill=tk.X, pady=(2, 6))
+        ttk.Label(body, text="显示名称").pack(anchor="w")
+        entry_name = ttk.Entry(body, width=34)
+        entry_name.pack(fill=tk.X, pady=(2, 8))
 
         def do_add():
             proc = entry_proc.get().strip()
             name = entry_name.get().strip()
             if not proc:
-                messagebox.showwarning("提示", "请选择程序或输入进程名称", parent=dialog)
+                DarkDialog(dialog, "添加自定义软件", "请选择程序或输入进程名称。")
                 return
-            if not name:
-                name = proc
-            exe_path = getattr(dialog, "_exe_path", "")
-            self.config.add_custom(proc, name, exe_path)
+            self.config.add_custom(proc, name or proc, getattr(dialog, "_exe_path", ""))
             self.monitor.refresh_baseline()
             self._refresh_manage()
             self._refresh_today()
             dialog.destroy()
 
-        tk.Button(btn_frame, text="添加", font=(FONT_FAMILY, FONT_SIZE),
-                  bg=COLOR_PRIMARY, fg="white", relief="flat", padx=16, pady=4,
-                  command=do_add).pack(side=tk.RIGHT, padx=(4, 0))
-        tk.Button(btn_frame, text="取消", font=(FONT_FAMILY, FONT_SIZE),
-                  bg=COLOR_BORDER, fg=COLOR_TEXT, relief="flat", padx=16, pady=4,
-                  command=dialog.destroy).pack(side=tk.RIGHT)
-
-        entry_proc.bind("<Return>", lambda e: do_add())
-        entry_name.bind("<Return>", lambda e: do_add())
+        actions = ttk.Frame(body)
+        actions.pack(fill=tk.X)
+        ttk.Button(actions, text="添加", style="Primary.TButton", command=do_add).pack(side=tk.RIGHT)
+        ttk.Button(actions, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 4))
+        entry_proc.bind("<Return>", lambda event: do_add())
+        entry_name.bind("<Return>", lambda event: do_add())
+        self._show_dialog(dialog)
+        entry_proc.focus_set()
 
     def _browse_exe(self, dialog, entry_proc, entry_name):
         """打开文件选择器，选取 .exe 并自动填入进程名和显示名"""
@@ -1062,107 +858,56 @@ class AppCounterGUI:
 
     def _build_settings_tab(self):
         frame = self.tab_settings
-        frame.configure(bg=COLOR_BG)
+        card = ttk.Frame(frame, style="Card.TFrame", padding=(9, 5))
+        card.pack(fill=tk.X, pady=(6, 4))
 
-        tk.Label(frame, text="应用设置",
-                 font=(FONT_FAMILY, FONT_SIZE_TITLE, "bold"),
-                 bg=COLOR_BG, fg=COLOR_TEXT).pack(anchor="w", padx=12, pady=(12, 6))
-
-        # 设置卡片
-        card = tk.Frame(frame, bg=COLOR_CARD_BG, relief="solid", bd=1)
-        card.pack(fill=tk.X, padx=12, pady=6)
-
-        # 最小化到托盘
         self.tray_var = tk.BooleanVar(value=self.config.get_setting("minimize_to_tray", True))
-        self._setting_row(card, "最小化到系统托盘",
-                          "关闭窗口时最小化到系统托盘而不是退出",
-                          self.tray_var, self._on_tray_setting_change)
-
-        # 开机自启
         self.startup_var = tk.BooleanVar(value=self.config.get_startup_enabled())
-        self._setting_row(card, "开机自启动",
-                          "电脑开机时自动在后台启动监控",
-                          self.startup_var, self._on_startup_setting_change)
-
-        # 启动通知
         self.notify_var = tk.BooleanVar(value=self.config.get_setting("show_notifications", True))
-        self._setting_row(card, "使用通知",
-                          "切换到应用窗口时弹出通知",
+        self._setting_row(card, "关闭窗口时最小化到系统托盘",
+                          self.tray_var, self._on_tray_setting_change)
+        self._setting_row(card, "开机时在后台启动监控",
+                          self.startup_var, self._on_startup_setting_change)
+        self._setting_row(card, "切换到应用时显示通知",
                           self.notify_var, self._on_notify_setting_change)
 
-        # 轮询间隔
-        interval_card = tk.Frame(frame, bg=COLOR_CARD_BG, relief="solid", bd=1)
-        interval_card.pack(fill=tk.X, padx=12, pady=6)
-
-        interval_header = tk.Frame(interval_card, bg=COLOR_CARD_BG)
-        interval_header.pack(fill=tk.X, padx=16, pady=(12, 4))
-        tk.Label(interval_header, text="检测间隔",
-                 font=(FONT_FAMILY, FONT_SIZE, "bold"), bg=COLOR_CARD_BG,
-                 fg=COLOR_TEXT).pack(side=tk.LEFT)
-        self.interval_label = tk.Label(interval_header,
-                                       text=f"{self.config.get_setting('poll_interval_ms', 500)} ms",
-                                       font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                                       bg=COLOR_CARD_BG, fg=COLOR_PRIMARY)
-        self.interval_label.pack(side=tk.RIGHT)
-
-        tk.Label(interval_card,
-                 text="越短越灵敏，100 ms ~ 5000 ms 无极调节",
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                 bg=COLOR_CARD_BG, fg=COLOR_TEXT_SECONDARY).pack(anchor="w", padx=16, pady=(0, 6))
-
-        self.interval_scale = tk.Scale(interval_card, from_=100, to=5000, resolution=100,
-                                       orient=tk.HORIZONTAL, bg=COLOR_CARD_BG,
-                                       highlightthickness=0, length=400,
-                                       command=self._on_interval_change)
+        interval_card = ttk.Frame(frame, style="Card.TFrame", padding=(9, 5))
+        interval_card.pack(fill=tk.X, pady=(0, 4))
         current_interval = self.config.get_setting("poll_interval_ms", 500)
+        ttk.Label(interval_card, text="检测间隔", style="Card.TLabel").pack(side=tk.LEFT)
+        self.interval_label = ttk.Label(interval_card, text=f"{current_interval} ms",
+                                        style="Summary.Card.TLabel", width=9, anchor="e")
+        self.interval_label.pack(side=tk.RIGHT, padx=(6, 0))
+        self.interval_scale = tk.Scale(
+            interval_card, from_=100, to=5000, resolution=100, showvalue=False,
+            orient=tk.HORIZONTAL, bg=COLOR_BUTTON, activebackground=COLOR_HOVER,
+            troughcolor=COLOR_BG, highlightbackground=COLOR_CARD_BG,
+            highlightcolor=COLOR_PRIMARY, highlightthickness=1, borderwidth=0,
+            sliderrelief="flat", width=12, command=self._on_interval_change,
+        )
         self.interval_scale.set(current_interval)
-        self.interval_scale.pack(padx=16, pady=(0, 12), anchor="w")
+        self.interval_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(7, 0))
 
-        # 数据管理
-        data_card = tk.Frame(frame, bg=COLOR_CARD_BG, relief="solid", bd=1)
-        data_card.pack(fill=tk.X, padx=12, pady=6)
+        data_card = ttk.Frame(frame, style="Card.TFrame", padding=(9, 6))
+        data_card.pack(fill=tk.X)
+        file_row = ttk.Frame(data_card, style="Card.TFrame")
+        file_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(file_row, text="数据文件", style="Card.TLabel").pack(side=tk.LEFT, padx=(0, 7))
+        data_path = ttk.Entry(file_row, width=20, font=(FONT_FAMILY, FONT_SIZE_SMALL))
+        data_path.insert(0, DATA_FILE)
+        data_path.state(["readonly"])
+        data_path.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        tk.Label(data_card, text="数据管理",
-                 font=(FONT_FAMILY, FONT_SIZE, "bold"),
-                 bg=COLOR_CARD_BG, fg=COLOR_TEXT).pack(anchor="w", padx=16, pady=(12, 4))
+        buttons = ttk.Frame(data_card, style="Card.TFrame")
+        buttons.pack(fill=tk.X)
+        ttk.Button(buttons, text="清除今日数据", command=self._reset_today).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="清除全部历史数据", style="Danger.TButton",
+                   command=self._reset_all_data).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(buttons, text="AppCounter 1.0.0", style="Detail.Card.TLabel").pack(side=tk.RIGHT)
 
-        tk.Label(data_card, text=f"数据文件位置: {DATA_FILE}",
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                 bg=COLOR_CARD_BG, fg=COLOR_TEXT_SECONDARY,
-                 wraplength=700).pack(anchor="w", padx=16, pady=(0, 6))
-
-        btn_frame = tk.Frame(data_card, bg=COLOR_CARD_BG)
-        btn_frame.pack(anchor="w", padx=16, pady=(0, 12))
-
-        ttk.Button(btn_frame, text="清除今日数据", style="Small.TButton",
-                   command=self._reset_today).pack(side=tk.LEFT, padx=(0, 4))
-
-        ttk.Button(btn_frame, text="清除全部历史数据", style="Danger.TButton",
-                   command=self._reset_all_data).pack(side=tk.LEFT)
-
-        # 关于
-        about_card = tk.Frame(frame, bg=COLOR_CARD_BG, relief="solid", bd=1)
-        about_card.pack(fill=tk.X, padx=12, pady=6)
-
-        tk.Label(about_card, text="关于 AppCounter",
-                 font=(FONT_FAMILY, FONT_SIZE, "bold"),
-                 bg=COLOR_CARD_BG, fg=COLOR_TEXT).pack(anchor="w", padx=16, pady=(12, 4))
-        tk.Label(about_card, text="版本 1.0.0 | 监控电脑软件使用次数",
-                 font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                 bg=COLOR_CARD_BG, fg=COLOR_TEXT_SECONDARY).pack(anchor="w", padx=16, pady=(0, 10))
-
-    def _setting_row(self, parent, title: str, desc: str, var: tk.BooleanVar,
-                     command=None):
-        row = tk.Frame(parent, bg=COLOR_CARD_BG)
-        row.pack(fill=tk.X, padx=16, pady=8)
-        info = tk.Frame(row, bg=COLOR_CARD_BG)
-        info.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Label(info, text=title, font=(FONT_FAMILY, FONT_SIZE, "bold"),
-                 bg=COLOR_CARD_BG, fg=COLOR_TEXT).pack(anchor="w")
-        tk.Label(info, text=desc, font=(FONT_FAMILY, FONT_SIZE_SMALL),
-                 bg=COLOR_CARD_BG, fg=COLOR_TEXT_SECONDARY).pack(anchor="w")
-        cb = ttk.Checkbutton(row, variable=var, command=command)
-        cb.pack(side=tk.RIGHT)
+    def _setting_row(self, parent, title: str, var: tk.BooleanVar, command):
+        ttk.Checkbutton(parent, text=title, variable=var, command=command,
+                        style="Card.TCheckbutton").pack(fill=tk.X, pady=2)
 
     def _on_tray_setting_change(self):
         self.config.set_setting("minimize_to_tray", self.tray_var.get())
@@ -1174,7 +919,7 @@ class AppCounterGUI:
         if self.startup_var.get():
             ok = self.config.enable_startup()
             if not ok:
-                messagebox.showwarning("提示", "设置开机自启失败，请检查权限。")
+                DarkDialog(self.root, "开机自启", "设置开机自启失败，请检查权限。")
                 self.startup_var.set(False)
         else:
             self.config.disable_startup()
@@ -1185,7 +930,8 @@ class AppCounterGUI:
         self.interval_label.config(text=f"{ms} ms")
 
     def _reset_all_data(self):
-        if messagebox.askyesno("⚠ 确认清除", "确定要清除全部历史计数数据吗？\n此操作不可撤销！"):
+        if DarkDialog(self.root, "清除历史", "确定要清除全部历史计数数据吗？\n此操作不可撤销。",
+                      confirm=True).result:
             self.config.reset_all()
             self._refresh_today()
 
